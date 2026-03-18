@@ -12,13 +12,14 @@ typedef struct
     stbi_uc* data;
     int width;
     int height;
-    int channels;
 } IMAGE;
 
 IMAGE* LoadImage(const char* path)
 {
+    int channels;
+
     IMAGE* image = (IMAGE*)malloc(sizeof(IMAGE));
-    image->data = stbi_load(path, &(image->width), &(image->height), &(image->channels), STBI_rgb_alpha);
+    image->data = stbi_load(path, &(image->width), &(image->height), &channels, STBI_rgb_alpha);
 
     return image;
 }
@@ -32,6 +33,59 @@ void FreeImage(IMAGE* image)
 {
     stbi_image_free(image->data);
     free(image);
+}
+
+IMAGE* CudaImageMalloc(int width, int height)
+{
+    int dataSize = width * height * STBI_rgb_alpha;
+
+    stbi_uc* d_data;
+    cudaMalloc((void**)&d_data, dataSize);
+
+    IMAGE* d_image;
+    cudaMalloc((void**)&d_image, sizeof(IMAGE));
+
+    IMAGE ref = {d_data, width, height};
+    cudaMemcpy(d_image, &ref, sizeof(IMAGE), cudaMemcpyHostToDevice);
+
+    return d_image;
+}
+
+void CudaImageCopy(IMAGE* dest, IMAGE* src, cudaMemcpyKind kind)
+{
+    if(kind == cudaMemcpyHostToDevice)
+    {
+        int dataSize = src->width * src->height * STBI_rgb_alpha;
+
+        IMAGE ref;
+        cudaMemcpy(&ref, dest, sizeof(IMAGE), cudaMemcpyDeviceToHost);
+        
+        cudaMemcpy(ref.data, src->data, dataSize, cudaMemcpyHostToDevice);
+        ref.width = src->width;
+        ref.height = src->height;
+
+        cudaMemcpy(dest, &ref, sizeof(IMAGE), cudaMemcpyHostToDevice);
+    }
+    else if(kind == cudaMemcpyDeviceToHost)
+    {
+        IMAGE ref;
+        cudaMemcpy(&ref, src, sizeof(IMAGE), cudaMemcpyDeviceToHost);
+
+        int dataSize = ref.width * ref.height * STBI_rgb_alpha;
+
+        cudaMemcpy(dest->data, ref.data, dataSize, cudaMemcpyDeviceToHost);
+        dest->width = ref.width;
+        dest->height = ref.height;
+    }
+}
+
+void CudaImageFree(IMAGE* image)
+{
+    IMAGE temp;
+    cudaMemcpy(&temp, image, sizeof(IMAGE), cudaMemcpyDeviceToHost);
+
+    cudaFree(temp.data);
+    cudaFree(image);
 }
 
 //Pixel handling
