@@ -1,5 +1,7 @@
 #pragma once
 
+#include <math.h>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image/stb_image.h"
 
@@ -13,6 +15,18 @@ typedef struct
     int width;
     int height;
 } IMAGE;
+
+const dim3 imgBlockDim  = {32, 32, 1};
+
+IMAGE* MallocImage(int width, int height)
+{
+    IMAGE* img = (IMAGE*)malloc(sizeof(IMAGE));
+    img->data = (stbi_uc*)calloc(width * height, STBI_rgb_alpha);
+    img->width = width;
+    img->height = height;
+
+    return img;
+}
 
 IMAGE* LoadImage(const char* path)
 {
@@ -86,6 +100,16 @@ void CudaImageFree(IMAGE* image)
 
     cudaFree(temp.data);
     cudaFree(image);
+}
+
+dim3 GetGridDim(IMAGE* image)
+{
+    return 
+    { 
+        (unsigned int)ceil( image->width   / (float)imgBlockDim.x ), 
+        (unsigned int)ceil( image->height  / (float)imgBlockDim.y ), 
+        1 
+    };
 }
 
 //Pixel handling
