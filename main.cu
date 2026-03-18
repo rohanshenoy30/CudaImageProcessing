@@ -5,6 +5,7 @@
 
 #include "utils/image.h"
 #include "algs/upscale.h"
+#include "mlaa.h"
 
 int main(int argc, char** argv)
 {
@@ -22,12 +23,8 @@ int main(int argc, char** argv)
         free(img);
         return 1;
     }
-
-    IMAGE* upscaled = Upscale(img, 4);
-    printf("Upscaled image (%d %d)\n", upscaled->width, upscaled->height);
-    WriteImage("output/upscaled.png", upscaled);
+    printf("Successfully loaded image.\n");
 
     FreeImage(img);
-    FreeImage(upscaled);
     return 0;
 }
