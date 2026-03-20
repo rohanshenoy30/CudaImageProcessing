@@ -2,26 +2,58 @@
 #include "device_launch_parameters.h"
 
 #include <math.h>
+#include <stdio.h>  //
+#include <errno.h>
 
 #include "../utils/image.h"
+#include "../utils/interp.h"
+
+#define AREA_TEX_PATH "area/AreaTex.png"
+#define MAX_SEARCH_STEPS 4
 
 // This implemententation uses Jorge Jimenez et al.'s improved MLAA algorithm.
 // Details can be found at https://www.iryoku.com/mlaa/
 
-IMAGE* MLAA(IMAGE* input);
-
 //In the first pass, edges are detected in the image
-IMAGE* DetectEdges(IMAGE* input);
+void DetectEdges(IMAGE* input, IMAGE* output);
 __global__ void DetectEdgesKernel(IMAGE* in, IMAGE* out);
 
 //In the second pass, the blending weights for each pixel adjacent to the edges being smoothed are calculated.
-IMAGE* GetBlendWeights(IMAGE* input);
-__global__ void GetBlendWeightsKernel(IMAGE* in, IMAGE* out);
+void GetBlendWeights(IMAGE* input, IMAGE* output, IMAGE* areas);
+__global__ void GetBlendWeightsKernel(IMAGE* in, IMAGE* out, IMAGE* areas);
 
 //In the third pass, the blending weights are used to blend each pixel with its 4-neighborhood.
-IMAGE* AntiAlias(IMAGE* input);
+void AntiAlias(IMAGE* input, IMAGE* output);
 __global__ void AntiAliasKernel(IMAGE* in, IMAGE* out);
 
+IMAGE* LoadAreaTex()
+{
+    IMAGE* h_areaTex = LoadImage(AREA_TEX_PATH);
+
+    IMAGE* d_areaTex = CudaImageMalloc(h_areaTex->width, h_areaTex->height);
+    CudaImageCopy(d_areaTex, h_areaTex, cudaMemcpyHostToDevice);
+
+    FreeImage(h_areaTex);
+
+    return d_areaTex;
+}
+
+void MLAA(IMAGE* input, IMAGE* edges, IMAGE* weights, IMAGE* output)
+{
+    IMAGE* areaTex = LoadAreaTex();
+    printf("Area texture loaded\n");
+
+    DetectEdges(input, edges);
+    printf("1st pass complete\n");
+    GetBlendWeights(edges, weights, areaTex);
+    printf("2nd pass complete\n");
+
+    CudaImageFree(areaTex);
+    printf("Area texture freed\n");
+}
+
+
+/* ============================================ PASS 1 ============================================ */
 
 //uses the CIE XYZ relative luminance (approximate) formula
 __device__ float Luminance(PIXEL p)
@@ -37,7 +69,7 @@ __device__ float Luminance(PIXEL p)
     return r_factor * r_lin + g_factor * g_lin + b_factor * b_lin;
 }
 
-IMAGE* DetectEdges(IMAGE* input)
+void DetectEdges(IMAGE* input, IMAGE* output)
 {
     IMAGE* d_in = CudaImageMalloc(input->width, input->height);
     CudaImageCopy(d_in, input, cudaMemcpyHostToDevice);
@@ -45,14 +77,12 @@ IMAGE* DetectEdges(IMAGE* input)
     IMAGE* d_out = CudaImageMalloc(input->width, input->height);
 
     DetectEdgesKernel<<< GetGridDim(input), imgBlockDim >>>(d_in, d_out);
+    cudaDeviceSynchronize();
 
-    IMAGE* output = MallocImage(input->width, input->height);
     CudaImageCopy(output, d_out, cudaMemcpyDeviceToHost);
 
     CudaImageFree(d_in);
     CudaImageFree(d_out);
-
-    return output;
 }
 
 __global__ void DetectEdgesKernel(IMAGE* in, IMAGE* out)
@@ -62,13 +92,12 @@ __global__ void DetectEdgesKernel(IMAGE* in, IMAGE* out)
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if(x > in->width) return;
-    if(y > in->height) return;
+    if(x >= in->width)  return;
+    if(y >= in->height) return;
 
-    //Pixels out of image bounds are assumed to have the same color
     PIXEL current = GetPixel(in, x, y);
-    PIXEL left = (x - 1 < 0) ? current : GetPixel(in, x - 1, y    );
-    PIXEL top  = (y - 1 < 0) ? current : GetPixel(in, x    , y - 1);
+    PIXEL left = GetPixel(in, x - 1, y);
+    PIXEL top = GetPixel(in, x, y - 1);
 
     //Luminance is used to compare pixels
     float currentLum = Luminance(current);
@@ -89,3 +118,145 @@ __global__ void DetectEdgesKernel(IMAGE* in, IMAGE* out)
     };
     SetPixel(out, x, y, edgel);
 }
+
+/* ============================================ PASS 2 ============================================ */
+
+__device__ int SearchXLeft(IMAGE* image, int x, int y)
+{
+    float xs = x - 1.5;
+    float e = 0;
+
+    for(int i = 0; i < MAX_SEARCH_STEPS; i++)               //-ve x
+    {
+        e = ImageInterp(image, xs, y).g / 255.0;   //normalize to 0..1
+        if(e < 0.9)
+        {
+            return Round(2 * i + 2 * e);
+        }
+
+        xs -= 2.0;
+    }
+
+    return MAX_SEARCH_STEPS * 2;
+}
+
+__device__ int SearchXRight(IMAGE* image, int x, int y)     //+ve x
+{
+    float xs = x + 1.5;
+    float e = 0;
+
+    for(int i = 0; i < MAX_SEARCH_STEPS; i++)
+    {
+        e = ImageInterp(image, xs, y).g / 255.0;   //normalize to 0..1
+        if(e < 0.9)
+        {
+            return Round(2 * i + 2 * e);
+        }
+
+        xs += 2.0;
+    }
+
+    return MAX_SEARCH_STEPS * 2;
+}
+
+__device__ int SearchYUp(IMAGE* image, int x, int y)        //-ve y
+{
+    float ys = y - 1.5;
+    float e = 0;
+
+    for(int i = 0; i < MAX_SEARCH_STEPS; i++)
+    {
+        e = ImageInterp(image, x, ys).r / 255.0;   //normalize to 0..1
+        if(e < 0.9)
+        {
+            return Round(2 * i + 2 * e);
+        }
+
+        ys -= 2.0;
+    }
+
+    return MAX_SEARCH_STEPS * 2;
+}
+
+__device__ int SearchYDown(IMAGE* image, int x, int y)      //+ve y
+{
+    float ys = y + 1.5;
+    float e = 0;
+
+    for(int i = 0; i < MAX_SEARCH_STEPS; i++)
+    {
+        e = ImageInterp(image, x, ys).r / 255.0;   //normalize to 0..1
+        if(e < 0.9)
+        {
+            return Round(2 * i + 2 * e);
+        }
+
+        ys += 2.0;
+    }
+
+    return MAX_SEARCH_STEPS * 2;
+}
+
+__device__ void GetAreas(IMAGE* areaTex, stbi_uc e1, stbi_uc e2, int l, int r, stbi_uc* a1, stbi_uc* a2)
+{
+    int u = 9 * Round(4 * ((int)e1 / 255.0)) + l;
+    int v = 9 * Round(4 * ((int)e2 / 255.0)) + r;
+
+    PIXEL a = GetPixel(areaTex, u, v);
+    *a1 = a.r;
+    *a2 = a.g;
+}
+
+void GetBlendWeights(IMAGE* input, IMAGE* output, IMAGE* areas)
+{
+    IMAGE* d_in = CudaImageMalloc(input->width, input->height);
+    CudaImageCopy(d_in, input, cudaMemcpyHostToDevice);
+
+    IMAGE* d_out = CudaImageMalloc(input->width, input->height);
+
+    GetBlendWeightsKernel<<< GetGridDim(input), imgBlockDim >>>(d_in, d_out, areas);
+    cudaDeviceSynchronize();
+
+    CudaImageCopy(output, d_out, cudaMemcpyDeviceToHost);
+
+    CudaImageFree(d_in);
+    CudaImageFree(d_out);
+}
+
+__global__ void GetBlendWeightsKernel(IMAGE* in, IMAGE* out, IMAGE* areas)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if(x >= in->width)  return;
+    if(y >= in->height) return;
+
+    PIXEL weights = { 0, 0, 0, 0 };
+    PIXEL current = GetPixel(in, x, y);
+
+    if(current.g)   //edge on top
+    {
+        int l = SearchXLeft(in, x, y);
+        int r = SearchXRight(in, x, y);
+
+        stbi_uc e1 = ImageInterp(in, x - l, y - 0.25).r;
+        stbi_uc e2 = ImageInterp(in, x + r + 1, y - 0.25).r;
+
+        GetAreas(areas, e1, e2, l, r, &weights.r, &weights.g);
+    }
+    if(current.r)   //edge on left
+    {
+        int u = SearchYUp(in, x, y);
+        int d = SearchYDown(in, x, y);
+
+        stbi_uc e1 = ImageInterp(in, x - 0.25, y - u).g;
+        stbi_uc e2 = ImageInterp(in, x - 0.25, y + d + 1).g;
+
+        GetAreas(areas, e1, e2, u, d, &weights.b, &weights.a);
+    }
+
+    SetPixel(out, x, y, weights);
+}
+
+/* ============================================ PASS 3 ============================================ */
+

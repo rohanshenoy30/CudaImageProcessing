@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include "utils/image.h"
+#include "utils/interp.h"
 #include "algs/upscale.h"
 #include "algs/mlaa.h"
 
@@ -25,12 +26,19 @@ int main(int argc, char** argv)
     }
     printf("Successfully loaded image.\n");
 
-    IMAGE* edges = DetectEdges(img);
-    printf("Edge detection complete.\n");
-    WriteImage("output/output.png", edges);
-    printf("1st pass written to output.\n");
+    IMAGE* edges = MallocImage(img->width, img->height);
+    IMAGE* weights = MallocImage(img->width, img->height);
+    MLAA(img, edges, weights, NULL);
+    printf("MLAA completed\n");
+
+    WriteImage("output/edges.png", edges);
+    printf("Written edges.png\n");
+    WriteImage("output/weights.png", weights);
+    printf("Written weights.png\n");
 
     FreeImage(edges);
+    FreeImage(weights);
     FreeImage(img);
     return 0;
 }
+

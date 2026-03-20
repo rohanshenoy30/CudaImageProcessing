@@ -73,7 +73,7 @@ void CudaImageCopy(IMAGE* dest, IMAGE* src, cudaMemcpyKind kind)
 
         IMAGE ref;
         cudaMemcpy(&ref, dest, sizeof(IMAGE), cudaMemcpyDeviceToHost);
-        
+
         cudaMemcpy(ref.data, src->data, dataSize, cudaMemcpyHostToDevice);
         ref.width = src->width;
         ref.height = src->height;
