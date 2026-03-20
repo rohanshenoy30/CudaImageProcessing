@@ -28,16 +28,17 @@ int main(int argc, char** argv)
 
     IMAGE* edges = MallocImage(img->width, img->height);
     IMAGE* weights = MallocImage(img->width, img->height);
-    MLAA(img, edges, weights, NULL);
+    IMAGE* output = MallocImage(img->width, img->height);
+    MLAA(img, edges, weights, output);
     printf("MLAA completed\n");
 
-    WriteImage("output/edges.png", edges);
-    printf("Written edges.png\n");
-    WriteImage("output/weights.png", weights);
-    printf("Written weights.png\n");
+    WriteImage("output/mlaa_pass1.png", edges);
+    WriteImage("output/mlaa_pass2.png", weights);
+    WriteImage("output/mlaa_pass3.png", output);
 
     FreeImage(edges);
     FreeImage(weights);
+    FreeImage(output);
     FreeImage(img);
     return 0;
 }

@@ -2,7 +2,7 @@
 #include "device_launch_parameters.h"
 
 #include <math.h>
-#include <stdio.h>  //
+#include <stdio.h>
 #include <errno.h>
 
 #include "../utils/image.h"
@@ -23,8 +23,8 @@ void GetBlendWeights(IMAGE* input, IMAGE* output, IMAGE* areas);
 __global__ void GetBlendWeightsKernel(IMAGE* in, IMAGE* out, IMAGE* areas);
 
 //In the third pass, the blending weights are used to blend each pixel with its 4-neighborhood.
-void AntiAlias(IMAGE* input, IMAGE* output);
-__global__ void AntiAliasKernel(IMAGE* in, IMAGE* out);
+void BlendNeighborhood(IMAGE* input, IMAGE* weights, IMAGE* output);
+__global__ void BlendNeighborhoodKernel(IMAGE* in, IMAGE* weights, IMAGE* out);
 
 IMAGE* LoadAreaTex()
 {
@@ -41,15 +41,15 @@ IMAGE* LoadAreaTex()
 void MLAA(IMAGE* input, IMAGE* edges, IMAGE* weights, IMAGE* output)
 {
     IMAGE* areaTex = LoadAreaTex();
-    printf("Area texture loaded\n");
 
     DetectEdges(input, edges);
-    printf("1st pass complete\n");
+    printf("MLAA: 1st pass complete\n");
     GetBlendWeights(edges, weights, areaTex);
-    printf("2nd pass complete\n");
+    printf("MLAA: 2nd pass complete\n");
+    BlendNeighborhood(input, weights, output);
+    printf("MLAA: 3rd pass complete\n");
 
     CudaImageFree(areaTex);
-    printf("Area texture freed\n");
 }
 
 
@@ -259,4 +259,70 @@ __global__ void GetBlendWeightsKernel(IMAGE* in, IMAGE* out, IMAGE* areas)
 }
 
 /* ============================================ PASS 3 ============================================ */
+
+void BlendNeighborhood(IMAGE* input, IMAGE* weights, IMAGE* output)
+{
+    IMAGE* d_in = CudaImageMalloc(input->width, input->height);
+    CudaImageCopy(d_in, input, cudaMemcpyHostToDevice);
+
+    IMAGE* d_weights = CudaImageMalloc(weights->width, weights->height);
+    CudaImageCopy(d_weights, weights, cudaMemcpyHostToDevice);
+
+    IMAGE* d_out = CudaImageMalloc(input->width, input->height);
+
+    BlendNeighborhoodKernel<<< GetGridDim(input), imgBlockDim >>>(d_in, d_weights, d_out);
+    cudaDeviceSynchronize();
+
+    CudaImageCopy(output, d_out, cudaMemcpyDeviceToHost);
+
+    CudaImageFree(d_out);
+    CudaImageFree(d_weights);
+    CudaImageFree(d_in);
+}
+
+__global__ void BlendNeighborhoodKernel(IMAGE* in, IMAGE* weights, IMAGE* out)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if(x >= in->width)  return;
+    if(y >= in->height) return;
+
+    PIXEL blends = GetPixel(weights, x, y);
+    blends.g = (y >= in->height - 1) ? 0 : GetPixel(weights, x,     y + 1).g;
+    blends.a = (x >= in->width  - 1) ? 0 : GetPixel(weights, x + 1, y    ).a;
+
+    float rBlend = blends.r / 255.0;
+    float gBlend = blends.g / 255.0;
+    float bBlend = blends.b / 255.0;
+    float aBlend = blends.a / 255.0;
+
+    float sum = rBlend + gBlend + bBlend + aBlend;
+    if(sum > 0)
+    {
+        PIXEL up    = ImageInterp(in, x,          y - rBlend);
+        PIXEL down  = ImageInterp(in, x,          y + gBlend);
+        PIXEL left  = ImageInterp(in, x - bBlend, y         );
+        PIXEL right = ImageInterp(in, x + aBlend, y         );
+
+        float rResult = (up.r / 255.0) * rBlend + (down.r / 255.0) * gBlend + (left.r / 255.0) * bBlend + (right.r / 255.0) * aBlend;
+        float bResult = (up.b / 255.0) * rBlend + (down.b / 255.0) * gBlend + (left.b / 255.0) * bBlend + (right.b / 255.0) * aBlend;
+        float gResult = (up.g / 255.0) * rBlend + (down.g / 255.0) * gBlend + (left.g / 255.0) * bBlend + (right.g / 255.0) * aBlend;
+        float aResult = (up.a / 255.0) * rBlend + (down.a / 255.0) * gBlend + (left.a / 255.0) * bBlend + (right.a / 255.0) * aBlend;
+
+        PIXEL result = 
+        {
+            (stbi_uc)Round(255 * rResult / sum),
+            (stbi_uc)Round(255 * gResult / sum),
+            (stbi_uc)Round(255 * bResult / sum),
+            (stbi_uc)Round(255 * aResult / sum)
+        };
+
+        SetPixel(out, x, y, result);
+    }
+    else
+    {
+        SetPixel(out, x, y, GetPixel(in, x, y));
+    }
+}
 
