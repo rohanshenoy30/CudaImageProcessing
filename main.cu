@@ -8,6 +8,7 @@
 #include "algs/upscale.h"
 #include "algs/mlaa.h"
 #include "algs/sobel.h"
+#include "algs/cross.h"
 
 #define EXE_NAME "imgproc.exe"
 
@@ -24,6 +25,7 @@ const char* helpCommand    = "help";
 const char* upscaleCommand = "upscale";
 const char* mlaaCommand    = "mlaa";
 const char* sobelCommand   = "sobel";
+const char* crossCommand   = "cross";
 
 int CompareCommand(char* arg, const char* command)
 {
@@ -45,6 +47,7 @@ int main(int argc, char** argv)
         printf("[./imgproc.exe %s <filepath> [<factor>]]: Upscale the given image by an optional integer <factor>. Default upscaling factor is 4.\n", upscaleCommand); 
         printf("[./imgproc.exe %s <filepath>]: Antialias image using MLAA\n", mlaaCommand);
         printf("[./imgproc.exe %s <filepath>]: Run Sobel edge detection on the given image\n", sobelCommand);
+        printf("[./imgproc.exe %s <filepath>]: Run Roberts cross edge detection on the given image\n", crossCommand);
         return 0;
     }
     
@@ -129,6 +132,16 @@ int main(int argc, char** argv)
         printf("Image written to output.\n");
 
         FreeImage(sobel);
+    }
+    else if(CompareCommand(command, crossCommand))
+    {
+        IMAGE* cross = RobertsCross(img);
+        printf("Roberts cross edge detection complete. Writing to output...\n");
+
+        WriteImage("output/cross.png", cross);
+        printf("Image written to output.\n");
+
+        FreeImage(cross);
     }
     else
     {

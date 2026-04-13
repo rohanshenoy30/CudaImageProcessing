@@ -29,7 +29,7 @@ __global__ void SobelKernel(IMAGE* in, IMAGE* out)
             int u = x + i;
             int v = y + j;
 
-            int gray = 0;;
+            int gray = 0;
             if(IsPixelInBounds(in, u, v))
             {
                 PIXEL p = GetPixel(in, x + i, y + j);
